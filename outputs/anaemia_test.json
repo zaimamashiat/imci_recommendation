@@ -1,0 +1,48 @@
+{
+  "disease": "Anaemia",
+  "location": {
+    "selected_level": "upazila",
+    "selected_location": "Hijla",
+    "division": "Barishal",
+    "district": "Barishal",
+    "upazila": "Hijla",
+    "union": "Hizla Gaurabdi"
+  },
+  "summary": "In Hijla Upazila, the Anaemia count is currently 24 cases now (120 cases this week) and is projected at 12 cases next week (54 cases next week). Because of this ongoing disease burden and the risk of severe complications, the following IMCI clinical management and preventive measures are recommended:",
+  "priority_public_health_measures": [
+    "Provide iron folate (IFA) or multivitamin micronutrient (MMN) to children 6 months or older with anaemia (Page 8).",
+    "If the child is 1 year or older and has not received a dose in the previous 6 months, administer Mebendazole or Albendazole deworming (Page 8)."
+  ],
+  "health_facility_readiness": [
+    "Check for palmar pallor to classify anaemia (some or severe palmar pallor) (Page 8).",
+    "If severe palmar pallor is identified, refer URGENTLY to hospital and give first dose of iron or Multiple Micro-Nutrient (MMN) (Page 8)."
+  ],
+  "caregiver_and_community_communication": [
+    "Assess the child’s feeding if the child is less than 2 years old, or has moderate acute malnutrition or anaemia (Page 22).",
+    "Ask about usual feeding practices and feeding during illness; compare to age-appropriate feeding recommendations (Page 22).",
+    "Advise the mother when to return immediately and schedule a follow-up visit in 14 days (Page 8)."
+  ],
+  "booklet_references": [
+    "Page 22",
+    "Page 8"
+  ],
+  "requires_expert_review": false,
+  "expert_review_reason": "",
+  "disease_counts": {
+    "count_now": 24,
+    "count_next_week": 12,
+    "current_week_total": 120,
+    "next_week_total": 54,
+    "trend": "decreasing"
+  },
+  "retrieved_passages": [
+    {
+      "page": "Page 8",
+      "similarity": 0.7482
+    },
+    {
+      "page": "Page 22",
+      "similarity": 0.5996
+    }
+  ]
+}
