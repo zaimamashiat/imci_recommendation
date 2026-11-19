@@ -18,17 +18,17 @@ from pathlib import Path
 import psycopg
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Header
 from psycopg import sql
 from psycopg.rows import dict_row
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s", datefmt="%H:%M:%S", force=True)
 log = logging.getLogger(__name__)
-app = FastAPI(title='IMCI Forecast RAG')
+app = FastAPI(title='IMCI Forecast RAG - Reviewed Cache')
 
 @contextmanager
 def progress_timer(stage):
@@ -135,6 +135,18 @@ class RequestBody(BaseModel):
     forecast_date: date
     persist: bool = True
 
+
+class LocationTarget(BaseModel):
+    location_type: str
+    location_key: str
+
+
+class BatchRequestBody(BaseModel):
+    locations: list[LocationTarget] = Field(..., min_length=1)
+    forecast_date: date
+    persist: bool = True
+
+
 @lru_cache(maxsize=1)
 def kb():
     log.info("PDF | loading IMCI document and sentence-transformer index")
@@ -218,8 +230,8 @@ def retrieve_many(rows):
     return results
 
 def fetch_top_three(req):
-    if req.location_type not in ('district', 'upazila', 'union'):
-        raise ValueError('location_type must be district, upazila, or union')
+    if req.location_type not in ('division', 'district', 'upazila', 'union'):
+        raise ValueError('location_type must be division, district, upazila, or union')
     # Use the most recently updated forecast for each disease, avoiding duplicate
     # model runs/horizons being incorrectly added together.
     stmt = sql.SQL("""
@@ -275,8 +287,10 @@ def generate_batch(rows, passages_list, deadline=None):
         'Emphasize urgent clinical assessment/referral for danger signs when supported. '
         'For EACH supplied disease, output exactly three SHORT, single-sentence '
         'recommendations: priority_public_health_measure, health_facility_readiness, '
-        'community_communication. Cite each supported sentence as (PDF page N), '
-        'where N is a page actually supplied for THAT disease. '
+        'community_communication. Every recommendation based on evidence MUST end '
+        'with a citation in exactly this format: (PDF page N), using a page number '
+        "from that disease's supplied imci_evidence. Do not omit citations from "
+        'community_communication or replace them with unverified page numbers. '
         'If a category lacks relevant evidence, use exactly: '
         'Insufficient IMCI evidence in retrieved passages. '
         'Return only valid JSON in this shape: '
@@ -288,6 +302,31 @@ def generate_batch(rows, passages_list, deadline=None):
     )
     user_prompt = 'DISEASE FORECASTS AND IMCI EVIDENCE:\n' + json.dumps(
         inputs, ensure_ascii=False, default=str, separators=(',', ':'))
+
+    def validate_content(content):
+        output = parse_model_json(content)
+        items = output.get('recommendations')
+        if not isinstance(items, list) or len(items) != len(rows):
+            raise ValueError('Model did not return one recommendation per disease')
+        validated = []
+        for row, passages, item in zip(rows, passages_list, items):
+            if not isinstance(item, dict) or str(item.get('disease_code')) != str(row['disease_code']):
+                raise ValueError('Model disease code/order mismatch')
+            valid_pages = {int(p['page']) for p in passages}
+            result = {}
+            for key in FIELDS:
+                sentence = item.get(key)
+                if not isinstance(sentence, str) or not sentence.strip():
+                    raise ValueError(f'Missing or empty {key}')
+                sentence = sentence.strip()
+                cited = [int(n) for n in re.findall(r'PDF page\s+(\d+)', sentence, re.I)]
+                if cited and not set(cited).issubset(valid_pages):
+                    raise ValueError(f'Invalid page citation: {key}')
+                if not cited and sentence != 'Insufficient IMCI evidence in retrieved passages':
+                    raise ValueError(f'Missing PDF citation: {key}')
+                result[key] = sentence
+            validated.append(result)
+        return validated
 
     payload = {
         'model': os.getenv('MEDITRON_MODEL', 'meditron-27b'),
@@ -359,28 +398,49 @@ def generate_batch(rows, passages_list, deadline=None):
 
             try:
                 content = response.json()['choices'][0]['message']['content']
-                output = parse_model_json(content)
-                items = output.get('recommendations')
-                if not isinstance(items, list) or len(items) != len(rows):
-                    raise ValueError('Model did not return one recommendation per disease')
-                validated = []
-                for row, passages, item in zip(rows, passages_list, items):
-                    if not isinstance(item, dict) or str(item.get('disease_code')) != str(row['disease_code']):
-                        raise ValueError('Model disease code/order mismatch')
-                    valid_pages = {int(p['page']) for p in passages}
-                    result = {}
-                    for key in FIELDS:
-                        sentence = item.get(key)
-                        if not isinstance(sentence, str) or not sentence.strip():
-                            raise ValueError(f'Missing or empty {key}')
-                        sentence = sentence.strip()
-                        cited = [int(n) for n in re.findall(r'PDF page\s+(\d+)', sentence, re.I)]
-                        if cited and not set(cited).issubset(valid_pages):
-                            raise ValueError(f'Invalid page citation: {key}')
-                        if not cited and sentence != 'Insufficient IMCI evidence in retrieved passages':
-                            raise ValueError(f'Missing PDF citation: {key}')
-                        result[key] = sentence
-                    validated.append(result)
+                try:
+                    validated = validate_content(content)
+                except ValueError as exc:
+                    if not str(exc).startswith('Missing PDF citation:'):
+                        raise
+                    elapsed = time.monotonic() - _last_request
+                    if _last_request and elapsed < min_interval:
+                        cooldown = min_interval - elapsed
+                        if deadline is not None and time.monotonic() + cooldown + 2 >= deadline:
+                            raise TimeoutError(
+                                'Not enough time for the Meditron citation-correction request'
+                            ) from exc
+                        wait_with_progress(cooldown, 'minimum interval before citation correction')
+                    remaining = (deadline - time.monotonic()) if deadline is not None else float('inf')
+                    if remaining <= 2:
+                        raise TimeoutError('Insufficient time remaining to correct missing PDF citations') from exc
+                    log.warning('MEDITRON | output omitted a citation; requesting one correction')
+                    correction_payload = dict(payload)
+                    correction_payload['messages'] = [
+                        {'role': 'system', 'content': system_prompt},
+                        {'role': 'user', 'content': (
+                            user_prompt + '\n\nYour previous response omitted a required PDF '
+                            f'citation ({exc}). Regenerate the complete JSON response. End every '
+                            'evidence-based recommendation with (PDF page N), where N is a page '
+                            'listed in the matching disease evidence. Use the exact insufficient-'
+                            'evidence sentence for any category without supporting evidence.'
+                        )},
+                    ]
+                    remaining = (deadline - time.monotonic()) if deadline is not None else float('inf')
+                    _last_request = time.monotonic()
+                    correction_response = request_with_heartbeat(
+                        os.environ['MEDITRON_URL'],
+                        json=correction_payload,
+                        headers=headers,
+                        timeout=(
+                            min(3, max(1, remaining - 1)),
+                            min(float(os.getenv('MEDITRON_TIMEOUT', '25')), max(1, remaining - 1)),
+                        ),
+                        verify=verify,
+                    )
+                    correction_response.raise_for_status()
+                    content = correction_response.json()['choices'][0]['message']['content']
+                    validated = validate_content(content)
                 log.info("MEDITRON | validated %d disease recommendation(s)", len(validated))
                 return validated
             except (ValueError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
@@ -391,9 +451,135 @@ def generate_batch(rows, passages_list, deadline=None):
         meditron_lock.release()
     raise RuntimeError('Meditron request failed')
 
+# Only approved, evidence-versioned recommendations are served from the fast path.
+# Generation is a separate, intentionally slow administrative workflow.
+CACHE_TABLE = os.getenv('GUIDANCE_CACHE_TABLE', 'imci_guidance_cache')
+if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', CACHE_TABLE):
+    raise ValueError('Invalid GUIDANCE_CACHE_TABLE identifier')
+
+
+def pdf_version():
+    path = Path(os.environ['IMCI_PDF_PATH'])
+    if not path.is_file():
+        raise FileNotFoundError(f'IMCI PDF not found: {path}')
+    # Content hash, not modification time, prevents serving citations from an old PDF.
+    h = hashlib.sha256()
+    with path.open('rb') as f:
+        for part in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(part)
+    return h.hexdigest()
+
+
+def init_guidance_cache():
+    statement = sql.SQL('''CREATE TABLE IF NOT EXISTS {cache} (
+        disease_code TEXT NOT NULL,
+        pdf_sha256 TEXT NOT NULL,
+        disease_name TEXT NOT NULL,
+        priority_public_health_measure TEXT NOT NULL,
+        health_facility_readiness TEXT NOT NULL,
+        community_communication TEXT NOT NULL,
+        imci_references JSONB NOT NULL,
+        evidence_fingerprint TEXT NOT NULL,
+        review_status TEXT NOT NULL DEFAULT 'pending_review'
+            CHECK (review_status IN ('pending_review','approved','rejected')),
+        generated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        reviewed_at TIMESTAMPTZ,
+        reviewer_note TEXT,
+        PRIMARY KEY (disease_code, pdf_sha256)
+    )''').format(cache=sql.Identifier(SCHEMA, CACHE_TABLE))
+    with psycopg.connect(os.environ['DATABASE_URL']) as conn:
+        with conn.cursor() as cur:
+            cur.execute(statement)
+    log.info('CACHE | ensured guidance table %s.%s', SCHEMA, CACHE_TABLE)
+
+
+def fetch_guidance(codes, version):
+    stmt = sql.SQL('''SELECT * FROM {cache}
+        WHERE disease_code = ANY(%s) AND pdf_sha256 = %s
+          AND review_status = 'approved' ''').format(
+        cache=sql.Identifier(SCHEMA, CACHE_TABLE))
+    with psycopg.connect(os.environ['DATABASE_URL'], row_factory=dict_row) as conn:
+        with conn.cursor() as cur:
+            cur.execute(stmt, (list(map(str, codes)), version))
+            return {str(r['disease_code']): r for r in cur.fetchall()}
+
+
+def save_pending_guidance(rows, passages_list, generated_list, version):
+    stmt = sql.SQL('''INSERT INTO {cache} (
+        disease_code, pdf_sha256, disease_name,
+        priority_public_health_measure, health_facility_readiness,
+        community_communication, imci_references, evidence_fingerprint,
+        review_status, generated_at, reviewed_at, reviewer_note)
+        VALUES (%s,%s,%s,%s,%s,%s,%s::jsonb,%s,'pending_review',now(),NULL,NULL)
+        ON CONFLICT (disease_code, pdf_sha256) DO UPDATE SET
+        disease_name = EXCLUDED.disease_name,
+        priority_public_health_measure = EXCLUDED.priority_public_health_measure,
+        health_facility_readiness = EXCLUDED.health_facility_readiness,
+        community_communication = EXCLUDED.community_communication,
+        imci_references = EXCLUDED.imci_references,
+        evidence_fingerprint = EXCLUDED.evidence_fingerprint,
+        review_status = 'pending_review', generated_at = now(),
+        reviewed_at = NULL, reviewer_note = NULL
+        WHERE {table}.review_status <> 'approved' ''').format(
+        cache=sql.Identifier(SCHEMA, CACHE_TABLE), table=sql.Identifier(CACHE_TABLE))
+    with psycopg.connect(os.environ['DATABASE_URL']) as conn:
+        with conn.cursor() as cur:
+            for row, passages, generated in zip(rows, passages_list, generated_list):
+                evidence = [{'pdf_page': p['page'], 'excerpt': p['text'][:250]}
+                            for p in passages]
+                fingerprint = hashlib.sha256(json.dumps(evidence, sort_keys=True).encode()).hexdigest()
+                cur.execute(stmt, (str(row['disease_code']), version,
+                    row['disease_name'], *(generated[f] for f in FIELDS),
+                    json.dumps(evidence), fingerprint))
+    log.info('CACHE | staged %d recommendations for clinical review', len(rows))
+
+
+class WarmupRequest(RequestBody):
+    persist: bool = False
+
+
+@app.post('/admin/prepare-guidance-with-token')
+def prepare_guidance_with_token(request: WarmupRequest,
+                                x_admin_token: str | None = Header(default=None)):
+    import secrets
+    expected = os.getenv('ADMIN_PREPARE_TOKEN', '')
+    if not expected or not x_admin_token or not secrets.compare_digest(expected, x_admin_token):
+        raise HTTPException(status_code=403, detail='Invalid administrative token')
+    try:
+        init_guidance_cache()
+        rows = fetch_top_three(request)
+        if not rows:
+            raise LookupError('No forecast records found')
+        version = pdf_version()
+        approved = fetch_guidance([r['disease_code'] for r in rows], version)
+        missing_rows = [r for r in rows if str(r['disease_code']) not in approved]
+        if not missing_rows:
+            return {'status': 'already_approved', 'pending_diseases': [],
+                    'approved_diseases': [str(r['disease_code']) for r in rows]}
+        passages = retrieve_many(missing_rows)
+        generated = generate_batch(missing_rows, passages, deadline=None)
+        save_pending_guidance(missing_rows, passages, generated, version)
+        return {'status': 'pending_clinical_review',
+                'pending_diseases': [str(r['disease_code']) for r in missing_rows],
+                'pdf_sha256': version,
+                'message': 'Review clinical content and PDF citations before approving in PostgreSQL.'}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except MeditronRateLimit as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except Exception:
+        log.exception('Preparing guidance failed')
+        raise HTTPException(status_code=502, detail='Guidance preparation failed; inspect server logs')
+
+
 def priority(row):
     severe, risk = float(row['severe_count'] or 0), float(row['at_risk_count'] or 0)
     return 'critical' if severe > 0 else ('high' if risk > 0 else 'routine')
+
+
+def display_location_name(row, location_type):
+    return row.get(f'{location_type}_name') or row['location_key']
+
 
 def store(records):
     stmt = sql.SQL('''
@@ -426,7 +612,14 @@ def store(records):
 
 def run(req):
     started = time.perf_counter()
-    deadline = time.monotonic() + float(os.getenv('REQUEST_BUDGET_SECONDS', '30'))
+    default_budget = (
+        float(os.getenv('MEDITRON_TIMEOUT', '25'))
+        + max(0.0, float(os.getenv('MEDITRON_MIN_INTERVAL_SECONDS', '15')))
+        + 30
+    )
+    deadline = time.monotonic() + float(
+        os.getenv('REQUEST_BUDGET_SECONDS', str(default_budget))
+    )
     log.info("REQUEST | location_type=%s location_key=%s date=%s persist=%s", req.location_type, req.location_key, req.forecast_date, req.persist)
     with progress_timer("PostgreSQL forecast lookup and risk ranking"):
         rows = fetch_top_three(req)
@@ -443,7 +636,8 @@ def run(req):
 
     records = []
     for row, passages, generated in zip(rows, passages_list, generated_list):
-        summary = (f"For {row['location_type']} {row['location_key']} on {row['forecast_date']}, "
+        location_name = display_location_name(row, req.location_type)
+        summary = (f"For {req.location_type} {location_name} on {row['forecast_date']}, "
                    f"{row['disease_name']} has {row['forecasted_count']} forecast assessments, "
                    f"including {row['severe_count']} severe and {row['at_risk_count']} at-risk; "
                    f"reported severity label: {row['risk_level']}; trend: {row['trend']}.")
@@ -467,38 +661,87 @@ def run(req):
     log.info('Generated %d recommendations in %.2f seconds', len(records), elapsed)
     return {'location_type': req.location_type, 'location_key': req.location_key,
             'forecast_date': req.forecast_date.isoformat(), 'generated': len(records),
-            'saved': req.persist, 'elapsed_seconds': elapsed, 'recommendations': records}
+            'saved': req.persist, 'elapsed_seconds': elapsed,
+            'source': 'imci-pdf-rag-meditron', 'clinical_review_required': True,
+            'recommendations': records}
 
 @app.post('/generate')
-def generate_endpoint(request: RequestBody):
+def generate_endpoint(request: RequestBody | BatchRequestBody):
+    if isinstance(request, BatchRequestBody):
+        return generate_batch_endpoint(request)
     try:
         return run(request)
-    except TimeoutError as exc:
-        log.warning('30-second budget exceeded: %s', exc)
-        raise HTTPException(status_code=504, detail=str(exc)) from exc
-    except (ValueError, FileNotFoundError) as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except MeditronRateLimit as exc:
-        headers = {'Retry-After': str(max(1, int(exc.wait_seconds or 30)))}
-        raise HTTPException(status_code=429, detail='Meditron rate limited this request; retry later', headers=headers) from exc
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except requests.HTTPError as exc:
-        log.error('Meditron HTTP failure: %s', exc)
-        raise HTTPException(status_code=502, detail='Meditron upstream HTTP error') from exc
-    except RuntimeError as exc:
-        log.exception('Generation failed')
-        raise HTTPException(status_code=504 if 'connection failed after retries' in str(exc) else 502, detail=str(exc)) from exc
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception:
-        log.exception('Generation failed')
-        raise HTTPException(status_code=502, detail='Recommendation generation failed; see server logs')
+        log.exception('RAG recommendation generation failed')
+        raise HTTPException(status_code=502, detail='RAG recommendation generation failed; see server logs')
+
+
+@app.post('/generate/batch')
+def generate_batch_endpoint(request: BatchRequestBody):
+    results = []
+    for target in request.locations:
+        single_request = RequestBody(
+            location_type=target.location_type,
+            location_key=target.location_key,
+            forecast_date=request.forecast_date,
+            persist=request.persist,
+        )
+        try:
+            results.append({
+                'location_type': target.location_type,
+                'location_key': target.location_key,
+                'status': 'completed',
+                'result': run(single_request),
+            })
+        except LookupError as exc:
+            results.append({
+                'location_type': target.location_type,
+                'location_key': target.location_key,
+                'status': 'error',
+                'status_code': 404,
+                'detail': str(exc),
+            })
+        except (ValueError, FileNotFoundError) as exc:
+            results.append({
+                'location_type': target.location_type,
+                'location_key': target.location_key,
+                'status': 'error',
+                'status_code': 422,
+                'detail': str(exc),
+            })
+        except Exception:
+            log.exception(
+                'Batch recommendation generation failed for %s=%s',
+                target.location_type,
+                target.location_key,
+            )
+            results.append({
+                'location_type': target.location_type,
+                'location_key': target.location_key,
+                'status': 'error',
+                'status_code': 502,
+                'detail': 'RAG recommendation generation failed; see server logs',
+            })
+    failed = sum(result['status'] == 'error' for result in results)
+    return {
+        'status': 'completed' if not failed else 'partial_failure',
+        'requested_locations': len(results),
+        'completed_locations': len(results) - failed,
+        'failed_locations': failed,
+        'results': results,
+    }
+
 
 @app.get('/health')
 def health():
     return {'status': 'ok'}
 
 @app.get('/recommendations')
-def read_recommendations(location_type: str = Query(..., pattern='^(district|upazila|union)$'),
+def read_recommendations(location_type: str = Query(..., pattern='^(division|district|upazila|union)$'),
                          location_key: str = Query(...), forecast_date: date = Query(...)):
     statement = sql.SQL("""SELECT * FROM {dest}
        WHERE location_type = %s AND location_key = %s AND forecast_date = %s
