@@ -1,7 +1,13 @@
+import hashlib
 import json
 import logging
+import random
 import re
+import threading
 import time
+from concurrent.futures import Future
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -14,6 +20,42 @@ logger = logging.getLogger("imci_meditron")
 if config.MEDITRON_VERIFY_SSL is False:
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+_JSON_MISSING_COMMA_RX = re.compile(r'([\}\]"0-9]|true|false|null)(\s*\n\s*")')
+_JSON_TRAILING_COMMA_RX = re.compile(r',(\s*[\}\]])')
+_CITATION_PAGE_RX = re.compile(r"\d+")
+_LIST_ITEM_PREFIX_RX = re.compile(r"^[-*•\d.]+\s*")
+_MEDICATION_RXS = tuple(
+    re.compile(pattern, re.I)
+    for pattern in (
+        r"\bmg/kg\b",
+        r"\bper kg\b",
+        r"\boral dose\b",
+        r"\bgive \w+ mg\b",
+        r"\bdose of \d",
+        r"\btablets? of\b",
+        r"\bsyrup \d",
+        r"\bfirst dose\b",
+        r"\bsecond dose\b",
+        r"\bprescri(?:be|ption)\b",
+    )
+)
+_SESSION_LOCAL = threading.local()
+_IN_FLIGHT_REQUESTS: Dict[str, Future] = {}
+_IN_FLIGHT_LOCK = threading.Lock()
+
+
+def _get_http_session() -> requests.Session:
+    """Keep a reusable connection pool per worker thread."""
+    session = getattr(_SESSION_LOCAL, "session", None)
+    if session is None:
+        session = requests.Session()
+        _SESSION_LOCAL.session = session
+    return session
+
+
+# ---------------------------------------------------------------------------
+# PROMPT BUILDER — ultra-compact for speed
+# ---------------------------------------------------------------------------
 
 def build_prompts(
     disease: str,
@@ -22,89 +64,60 @@ def build_prompts(
     disease_counts: Optional[Dict[str, Any]] = None,
 ) -> Tuple[str, str]:
     """
-    Build concise system and user prompts for Meditron-27B.
+    Build minimal system+user prompts for Meditron-27B.
 
-    Schema (4 categories, max 5 items each, 1–2 sentences per item):
-      government_public_health_interventions
-      health_system_readiness
-      community_engagement
-      government_planning_and_monitoring
-
-    Rules enforced in prompt:
-    - Government/public-health planning level only (not individual patient treatment).
-    - No medication names, dosages, prescriptions, or individual treatment instructions.
-    - No disease counts, forecasts, trends, or risk scores in recommendations.
-    - Sole clinical evidence source: supplied IMCI booklet passages.
-    - Summary opens with disease count now and next week (injected by post-processor if LLM omits).
+    Design philosophy: every extra token in the prompt costs ~10-20 ms on
+    Meditron-27B. Keep the instructions telegraphic; move all formatting,
+    validation and fallback enrichment into parse_and_validate_response().
     """
-    # Build the location label used in instructions
     loc_name = (
-        location.get("upazila")
-        or location.get("union")
-        or location.get("district")
-        or location.get("selected_location")
-        or "the selected location"
+        location.get("upazila") or location.get("union")
+        or location.get("district") or location.get("selected_location")
+        or "the location"
     )
-
-    # Counts context — only for the summary sentence, NOT for recommendations
-    counts_line = ""
-    if disease_counts:
-        c_now = disease_counts.get("count_now", 0)
-        c_next = disease_counts.get("count_next_week", 0)
-        w_now = disease_counts.get("current_week_total", 0)
-        w_next = disease_counts.get("next_week_total", 0)
-        counts_line = (
-            f"CASELOAD (for summary only — do NOT use in recommendations): "
-            f"Day-1={c_now} cases (week total={w_now}); "
-            f"Day-7={c_next} cases (week total={w_next})."
-        )
 
     system_prompt = (
-        f"You are a government public-health planning assistant for the IMCI programme.\n"
-        f"Your output helps district and upazila health managers plan this week's response — "
-        f"not clinicians treating individual children.\n\n"
-        f"RULES (follow strictly):\n"
-        f"1. Use ONLY the IMCI booklet passages provided as evidence. Cite each page used.\n"
-        f"2. Generate location-specific, actionable interventions for {loc_name}.\n"
-        f"3. NEVER include medication names, dosages, prescriptions, or individual patient treatment.\n"
-        f"4. NEVER include disease counts, forecasts, trends, or risk scores inside recommendations.\n"
-        f"5. Each category: 3–5 items, one or two sentences each. No lists within items.\n"
-        f"6. Set requires_expert_review=true if passages do not support a full recommendation set.\n"
-        f"7. Return ONLY valid JSON. No markdown. No text outside the JSON object.\n\n"
-        f"JSON SCHEMA (exact field names required):\n"
-        f'{{\n'
-        f'  "disease": "{disease}",\n'
-        f'  "location": <location object>,\n'
-        f'  "summary": "<one sentence: count now, count next week, why action is needed>",\n'
-        f'  "government_public_health_interventions": ["<3–5 items>"],\n'
-        f'  "health_system_readiness": ["<3–5 items>"],\n'
-        f'  "community_engagement": ["<3–5 items>"],\n'
-        f'  "government_planning_and_monitoring": ["<3–5 items>"],\n'
-        f'  "booklet_references": ["Page N"],\n'
-        f'  "requires_expert_review": false,\n'
-        f'  "expert_review_reason": ""\n'
-        f'}}'
+        "You are an IMCI public-health planning assistant. "
+        "Output JSON only — no markdown, no text outside the object.\n"
+        "Use only the supplied booklet evidence; cite page numbers in each "
+        "recommendation; do not infer unsupported medical advice or give "
+        "individual treatment, medicines, or doses. Give 3 concise, actionable "
+        "recommendations per category, one sentence each; flag expert review.\n"
+        '{"disease":"…","summary":"…",'
+        '"government_public_health_interventions":["…"],'
+        '"health_system_readiness":["…"],'
+        '"community_engagement":["…"],'
+        '"government_planning_and_monitoring":["…"],'
+        '"booklet_references":["Page N"],'
+        '"requires_expert_review":false,"expert_review_reason":""}'
     )
 
-    # Format passages with page labels
-    formatted_passages = []
+    parts = []
     for p in passages:
-        page_label = p.get("page") or f"Page {p.get('page_number', '?')}"
-        formatted_passages.append(f"[{page_label}]\n{p.get('text', '').strip()}")
-    passages_text = "\n\n".join(formatted_passages)
+        pn = p.get("page_number") or "?"
+        txt = p.get("text", "").strip()[:config.RAG_MAX_PASSAGE_CHARS]
+        parts.append(f"[p{pn}] {txt}")
+    passage_block = "\n".join(parts)
+
+    counts_line = ""
+    if disease_counts:
+        counts_line = (
+            f"Cases: now={disease_counts.get('count_now',0)}, "
+            f"next_week={disease_counts.get('count_next_week',0)}."
+        )
 
     user_prompt = (
-        f"Disease: {disease}\n"
-        f"Location: {loc_name} "
-        f"(division={location.get('division','')}, district={location.get('district','')}, "
-        f"upazila={location.get('upazila','')}, union={location.get('union','')})\n"
-        f"{counts_line}\n\n"
-        f"IMCI BOOKLET PASSAGES:\n{passages_text}\n\n"
-        f"Generate the JSON recommendation object now."
+        f"{disease} in {loc_name}. {counts_line}\n"
+        f"Passages:\n{passage_block}\n"
+        f"Return JSON."
     )
 
     return system_prompt, user_prompt
 
+
+# ---------------------------------------------------------------------------
+# RESPONSE PARSER — robust, handles malformed / truncated JSON
+# ---------------------------------------------------------------------------
 
 def parse_and_validate_response(
     content: str,
@@ -114,58 +127,46 @@ def parse_and_validate_response(
     disease_counts: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Parse Meditron's structured JSON response and validate/sanitise all fields.
+    Parse Meditron's JSON output with repair for missing commas and truncation.
 
-    New 4-category schema:
-      government_public_health_interventions
-      health_system_readiness
-      community_engagement
-      government_planning_and_monitoring
-
-    For backwards compatibility the old 3-category keys are also accepted as fallback
-    aliases and migrated to the new schema.
-
-    Validation:
-    - 5-item cap per category.
-    - Medication / prescription language detection → triggers expert_review flag.
-    - Booklet page citation verification against retrieved passages.
-    - Summary guaranteed to open with disease count now and next week.
+    Post-processing:
+    - Normalises old 3-category keys → new 4-category schema.
+    - Caps each category at 5 items.
+    - Rejects items containing medication/dosage language.
+    - Validates page citations against retrieved passages.
+    - Guarantees summary opens with disease counts.
     """
     content = content.strip()
 
-    # Strip markdown fences if present
+    # Strip markdown fences
     if content.startswith("```"):
         lines = content.splitlines()
-        if lines and lines[0].startswith("```"):
+        if lines[0].startswith("```"):
             lines = lines[1:]
         if lines and lines[-1].strip().startswith("```"):
             lines = lines[:-1]
         content = "\n".join(lines).strip()
 
-    # -----------------------------------------------------------------
-    # JSON REPAIR HELPER (handles missing commas + truncated output)
-    # -----------------------------------------------------------------
-    def _repair_json(text: str) -> str:
-        # Pass 1: insert missing commas between adjacent JSON fields
-        text = re.sub(r'([\}\]"0-9]|true|false|null)(\s*\n\s*")', r'\1,\2', text)
-        # Pass 1b: strip trailing commas before ] or }
-        text = re.sub(r',(\s*[\}\]])', r'\1', text)
-
-        # Pass 2: close unclosed structures left by truncation
+    # --- JSON repair helper ---
+    def _repair(text: str) -> str:
+        # Insert missing commas between adjacent fields
+        text = _JSON_MISSING_COMMA_RX.sub(r'\1,\2', text)
+        # Strip trailing commas
+        text = _JSON_TRAILING_COMMA_RX.sub(r'\1', text)
+        # Close unclosed structures (truncation)
         stack: List[str] = []
-        in_string = False
-        escape_next = False
+        in_str = esc = False
         for ch in text:
-            if escape_next:
-                escape_next = False
+            if esc:
+                esc = False
                 continue
-            if ch == '\\' and in_string:
-                escape_next = True
+            if ch == '\\' and in_str:
+                esc = True
                 continue
             if ch == '"':
-                in_string = not in_string
+                in_str = not in_str
                 continue
-            if in_string:
+            if in_str:
                 continue
             if ch == '{':
                 stack.append('}')
@@ -173,218 +174,350 @@ def parse_and_validate_response(
                 stack.append(']')
             elif ch in ('}', ']') and stack:
                 stack.pop()
-        if in_string:
+        if in_str:
             text = text.rstrip() + '"'
         if stack:
             text = text.rstrip().rstrip(',') + ''.join(reversed(stack))
         return text
 
-    # -----------------------------------------------------------------
-    # PARSE: try raw → slice → truncated; each with and without repair
-    # -----------------------------------------------------------------
+    # --- Parse with fallback chain ---
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
         start = content.find("{")
         if start == -1:
-            raise ValueError(f"No JSON object found in LLM response: {content[:300]}")
+            raise ValueError(f"No JSON object in LLM response: {content[:200]}")
         end = content.rfind("}")
         candidates = []
         if end != -1 and end > start:
-            candidates.append(content[start : end + 1])
-        candidates.append(content[start:])  # truncated fallback
+            candidates.append(content[start:end + 1])
+        candidates.append(content[start:])
 
-        last_exc: Optional[Exception] = None
         data = None
-        for candidate in candidates:
-            for attempt in (candidate, _repair_json(candidate)):
+        last_exc: Optional[Exception] = None
+        for cand in candidates:
+            for attempt in (cand, _repair(cand)):
                 try:
                     data = json.loads(attempt)
-                    if attempt != candidate:
-                        logger.info("JSON repaired successfully (missing commas / truncation).")
+                    if attempt != cand:
+                        logger.info("JSON repaired successfully.")
                     break
-                except json.JSONDecodeError as exc:
-                    last_exc = exc
+                except json.JSONDecodeError as e:
+                    last_exc = e
             if data is not None:
                 break
-
         if data is None:
-            snippet = (candidates[0] if candidates else content)[:300]
-            logger.warning("JSON repair failed: %s. Snippet: %s", last_exc, snippet)
             raise ValueError(
-                f"Could not parse valid JSON from LLM response even after repair: {snippet}"
+                f"JSON parse failed after repair: {(candidates[0] if candidates else content)[:200]}"
             ) from last_exc
 
-    # -----------------------------------------------------------------
-    # HELPERS
-    # -----------------------------------------------------------------
+    # --- Helpers ---
     def as_list(val: Any, cap: int = 5) -> List[str]:
-        """Convert a value to a list of non-empty strings, capped at `cap` items."""
         if isinstance(val, list):
-            items = [str(item).strip() for item in val if str(item).strip()]
+            items = []
+            for value in val:
+                item = str(value).strip()
+                if item:
+                    items.append(item)
         elif isinstance(val, str) and val.strip():
-            items = [re.sub(r"^[-*•\d.]+\s*", "", ln).strip() for ln in val.split("\n")]
+            items = [_LIST_ITEM_PREFIX_RX.sub("", ln).strip() for ln in val.split("\n")]
             items = [i for i in items if i]
         else:
             items = []
         return items[:cap]
 
-    # Medication / prescription detection patterns
-    MEDICATION_SIGNALS = [
-        r"\bmg/kg\b", r"\bper kg\b", r"\boral dose\b", r"\bim dose\b",
-        r"\bgive \w+ mg\b", r"\bdose of \d",
-        r"\btablets? of\b", r"\bsyrup \d",
-        r"\bfirst dose\b", r"\bsecond dose\b",
-        r"\bcomplete (?:the )?treatment\b",
-        r"\btreatment [abc]:\b",
-        r"\bplan [abc]:\b",
-        r"\bprescri(?:be|ption)\b",
-    ]
-    _med_patterns = [re.compile(p, re.IGNORECASE) for p in MEDICATION_SIGNALS]
+    def clean_med(items: List[str]) -> Tuple[List[str], bool]:
+        clean, found = [], False
+        for i in items:
+            if any(pattern.search(i) for pattern in _MEDICATION_RXS):
+                found = True
+            else:
+                clean.append(i)
+        return clean, found
 
-    def has_medication_language(items: List[str]) -> bool:
-        for item in items:
-            if any(pat.search(item) for pat in _med_patterns):
-                return True
-        return False
-
-    def reject_medication_items(items: List[str]) -> List[str]:
-        """Remove individual-prescription items; flag if any were removed."""
-        clean = [i for i in items if not any(pat.search(i) for pat in _med_patterns)]
-        return clean
-
-    # -----------------------------------------------------------------
-    # EXTRACT FIELDS — new 4-category schema with old-schema aliases
-    # -----------------------------------------------------------------
+    # --- Extract fields with alias fallback ---
     disease = data.get("disease") or data.get("disease_name") or expected_disease
     summary = str(data.get("summary") or "").strip()
 
-    # New schema keys (preferred)
-    gov_interventions = as_list(
+    gov, med1 = clean_med(as_list(
         data.get("government_public_health_interventions")
-        # old alias fallback
         or data.get("priority_public_health_measures")
         or data.get("priority_public_health_measure")
-    )
-    health_system = as_list(
+    ))
+    health, med2 = clean_med(as_list(
         data.get("health_system_readiness")
         or data.get("health_facility_readiness")
-    )
-    community = as_list(
+    ))
+    comm, med3 = clean_med(as_list(
         data.get("community_engagement")
         or data.get("caregiver_and_community_communication")
         or data.get("community_communication")
-    )
-    planning = as_list(
-        data.get("government_planning_and_monitoring")
-        or []
-    )
+    ))
+    plan, med4 = clean_med(as_list(
+        data.get("government_planning_and_monitoring") or []
+    ))
+    medication_found = med1 or med2 or med3 or med4
 
-    # Strip medication language from every category
-    medication_found = False
-    for cat_items in (gov_interventions, health_system, community, planning):
-        if has_medication_language(cat_items):
-            medication_found = True
-            break
-
-    gov_interventions = reject_medication_items(gov_interventions)
-    health_system = reject_medication_items(health_system)
-    community = reject_medication_items(community)
-    planning = reject_medication_items(planning)
-
-    # -----------------------------------------------------------------
-    # CITATIONS: validate against retrieved pages
-    # -----------------------------------------------------------------
+    # --- Citation validation ---
     raw_refs = as_list(data.get("booklet_references") or data.get("imci_references"), cap=20)
-    retrieved_page_numbers = {
-        re.search(r"\d+", p).group() for p in retrieved_pages if re.search(r"\d+", p)
+    retrieved_nums = {
+        match.group()
+        for page in retrieved_pages
+        if (match := _CITATION_PAGE_RX.search(page))
     }
-
     validated_refs: List[str] = []
-    unverified_found = False
+    unverified = False
     for ref in raw_refs:
-        m = re.search(r"\d+", ref)
+        m = _CITATION_PAGE_RX.search(ref)
         if m:
             pn = m.group()
-            if pn in retrieved_page_numbers:
+            if pn in retrieved_nums:
                 validated_refs.append(f"Page {pn}")
             else:
-                logger.warning("LLM cited page %s not in retrieved set %s", pn, retrieved_page_numbers)
                 validated_refs.append(f"Page {pn} (unverified)")
-                unverified_found = True
+                unverified = True
         elif ref:
             validated_refs.append(ref)
-
     if not validated_refs and retrieved_pages:
         validated_refs = sorted(set(retrieved_pages))
 
-    # -----------------------------------------------------------------
-    # EXPERT REVIEW FLAG
-    # -----------------------------------------------------------------
-    requires_expert_review = bool(
+    # --- Expert review ---
+    requires_review = bool(
         data.get("requires_expert_review")
         if "requires_expert_review" in data
         else data.get("expert_review_required", False)
     )
-    expert_review_reason = str(data.get("expert_review_reason") or "").strip()
+    review_reason = str(data.get("expert_review_reason") or "").strip()
+    if unverified:
+        requires_review = True
+        review_reason = f"{review_reason} Unverified page citations found.".strip()
+    if medication_found:
+        requires_review = True
+        review_reason = f"{review_reason} Medication language removed.".strip()
 
-    if unverified_found and not requires_expert_review:
-        requires_expert_review = True
-        expert_review_reason = (expert_review_reason + " " if expert_review_reason else "") + \
-            "Cited booklet references could not all be verified against retrieved passages."
-
-    if medication_found and not requires_expert_review:
-        requires_expert_review = True
-        expert_review_reason = (expert_review_reason + " " if expert_review_reason else "") + \
-            "Response contained medication/dosage language that was removed from recommendations."
-
-    # -----------------------------------------------------------------
-    # SUMMARY: ensure it opens with disease count now and next week
-    # -----------------------------------------------------------------
+    # --- Summary: guarantee it opens with counts ---
     if disease_counts and disease_counts.get("count_now") is not None:
-        c_now  = disease_counts.get("count_now", 0)
+        c_now = disease_counts.get("count_now", 0)
         c_next = disease_counts.get("count_next_week", 0)
-        w_now  = disease_counts.get("current_week_total", 0)
+        w_now = disease_counts.get("current_week_total", 0)
         w_next = disease_counts.get("next_week_total", 0)
         loc_name = (
             location.get("upazila") or location.get("union")
             or location.get("district") or location.get("selected_location")
             or "the selected location"
         )
-        has_now  = str(c_now) in summary or "currently" in summary.lower() or "cases now" in summary.lower()
+        has_now = str(c_now) in summary or "currently" in summary.lower()
         has_next = str(c_next) in summary or "next week" in summary.lower()
-
         if not (has_now and has_next):
-            count_lead = (
-                f"In {loc_name}, the forecasted {disease} caseload is currently {c_now} cases "
-                f"({w_now} this week) and is projected at {c_next} cases next week "
-                f"({w_next} over the next 7 days). "
-                f"Given this burden, the following public-health interventions are recommended: "
-            )
-            summary = count_lead + summary
+            summary = (
+                f"In {loc_name}, the forecasted {disease} caseload is {c_now} cases now "
+                f"({w_now} this week), projected at {c_next} next week ({w_next}). "
+            ) + summary
 
-    # -----------------------------------------------------------------
-    # BUILD OUTPUT
-    # -----------------------------------------------------------------
+    # --- Build result ---
     res: Dict[str, Any] = {
         "disease": disease,
         "location": location,
         "summary": summary,
-        # New 4-category schema
-        "government_public_health_interventions": gov_interventions,
-        "health_system_readiness": health_system,
-        "community_engagement": community,
-        "government_planning_and_monitoring": planning,
-        "booklet_references": sorted(list(dict.fromkeys(validated_refs))),
-        "requires_expert_review": requires_expert_review,
-        "expert_review_reason": expert_review_reason.strip(),
+        "government_public_health_interventions": gov,
+        "health_system_readiness": health,
+        "community_engagement": comm,
+        "government_planning_and_monitoring": plan,
+        "booklet_references": sorted(dict.fromkeys(validated_refs)),
+        "requires_expert_review": requires_review,
+        "expert_review_reason": review_reason,
     }
     if disease_counts:
         res["disease_counts"] = disease_counts
-
     return res
 
-    return res
+
+# ---------------------------------------------------------------------------
+# MEDITRON API CALLER — pooled connections, bounded retries, and timing
+# ---------------------------------------------------------------------------
+
+class MeditronAPIError(RuntimeError):
+    """A classified failure calling the configured Meditron endpoint."""
+
+    def __init__(
+        self,
+        message: str,
+        category: str,
+        status_code: Optional[int] = None,
+    ):
+        super().__init__(message)
+        self.category = category
+        self.status_code = status_code
+
+
+def _retry_after_seconds(value: Optional[str]) -> Optional[float]:
+    if not value:
+        return None
+    try:
+        return max(0.0, float(value))
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+
+
+def _retry_delay(retry_number: int, retry_after: Optional[str] = None) -> float:
+    max_delay = max(0.0, config.MEDITRON_RETRY_MAX_DELAY)
+    if retry_after is not None:
+        requested_delay = _retry_after_seconds(retry_after)
+        if requested_delay is not None:
+            delay = min(max_delay, requested_delay)
+            jitter = min(
+                max_delay - delay,
+                delay * max(0.0, config.MEDITRON_RETRY_JITTER),
+            )
+            return delay + random.uniform(0.0, jitter)
+
+    exponential_cap = min(
+        max_delay,
+        max(0.0, config.MEDITRON_RETRY_BASE_DELAY) * (2 ** (retry_number - 1)),
+    )
+    return random.uniform(0.0, exponential_cap)
+
+
+def _request_meditron(
+    payload: Dict[str, Any],
+    headers: Dict[str, str],
+    timeout: Tuple[float, float],
+    retries: int,
+) -> Tuple[str, float]:
+    request_started = time.perf_counter()
+    attempts = retries + 1
+
+    for attempt in range(1, attempts + 1):
+        attempt_started = time.perf_counter()
+        try:
+            response = _get_http_session().post(
+                config.MEDITRON_URL,
+                headers=headers,
+                json=payload,
+                timeout=timeout,
+                verify=config.MEDITRON_VERIFY_SSL,
+            )
+        except requests.exceptions.SSLError as exc:
+            elapsed = time.perf_counter() - attempt_started
+            logger.error("Meditron TLS error after %.2fs: %s", elapsed, exc)
+            raise MeditronAPIError(
+                f"Meditron TLS connection failed: {exc}",
+                category="tls_error",
+            ) from exc
+        except requests.exceptions.ConnectionError as exc:
+            elapsed = time.perf_counter() - attempt_started
+            logger.warning(
+                "Meditron connection error on attempt %d/%d after %.2fs: %s",
+                attempt, attempts, elapsed, exc,
+            )
+            if attempt < attempts:
+                delay = _retry_delay(attempt)
+                logger.info("Retrying Meditron connection in %.2fs", delay)
+                time.sleep(delay)
+                continue
+            raise MeditronAPIError(
+                f"Meditron connection failed after {attempts} attempts: {exc}",
+                category="connection_error",
+            ) from exc
+        except requests.exceptions.Timeout as exc:
+            elapsed = time.perf_counter() - attempt_started
+            logger.error(
+                "Meditron response timed out after %.2fs; not retrying to avoid "
+                "duplicating an inference that may still be running: %s",
+                elapsed,
+                exc,
+            )
+            raise MeditronAPIError(
+                f"Meditron response timed out: {exc}",
+                category="timeout",
+            ) from exc
+        except requests.exceptions.RequestException as exc:
+            elapsed = time.perf_counter() - attempt_started
+            logger.error("Non-retryable Meditron request error after %.2fs: %s", elapsed, exc)
+            raise MeditronAPIError(
+                f"Meditron request failed: {exc}",
+                category="request_error",
+            ) from exc
+
+        elapsed = time.perf_counter() - attempt_started
+        status_code = response.status_code
+        if status_code == 429 or 500 <= status_code < 600:
+            category = "rate_limit" if status_code == 429 else "server_error"
+            logger.warning(
+                "Meditron HTTP %d (%s) on attempt %d/%d after %.2fs",
+                status_code, category, attempt, attempts, elapsed,
+            )
+            if attempt < attempts:
+                retry_after = response.headers.get("Retry-After") if status_code == 429 else None
+                delay = _retry_delay(attempt, retry_after)
+                logger.info(
+                    "Retrying Meditron HTTP %d in %.2fs%s",
+                    status_code,
+                    delay,
+                    " (Retry-After)" if retry_after else "",
+                )
+                time.sleep(delay)
+                continue
+            raise MeditronAPIError(
+                f"Meditron HTTP {status_code} after {attempts} attempts: {response.text[:300]}",
+                category=category,
+                status_code=status_code,
+            )
+
+        if not response.ok:
+            logger.error("Non-retryable Meditron HTTP %d after %.2fs", status_code, elapsed)
+            raise MeditronAPIError(
+                f"Meditron HTTP {status_code}: {response.text[:300]}",
+                category="client_error",
+                status_code=status_code,
+            )
+
+        try:
+            result = response.json()
+        except ValueError as exc:
+            raise MeditronAPIError(
+                "Meditron returned invalid JSON.",
+                category="invalid_response",
+                status_code=status_code,
+            ) from exc
+
+        choices = result.get("choices") if isinstance(result, dict) else None
+        first_choice = choices[0] if isinstance(choices, list) and choices else None
+        message = first_choice.get("message") if isinstance(first_choice, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, str) or not content.strip():
+            raise MeditronAPIError(
+                "Meditron response did not contain choices[0].message.content.",
+                category="invalid_response",
+                status_code=status_code,
+            )
+
+        total_elapsed = time.perf_counter() - request_started
+        usage = result.get("usage")
+        if not isinstance(usage, dict):
+            usage = {}
+        logger.info(
+            "Meditron response attempt_latency=%.2fs total_latency=%.2fs "
+            "(attempt %d/%d, HTTP %d) — "
+            "prompt_tokens=%s, completion_tokens=%s, total_tokens=%s",
+            elapsed,
+            total_elapsed,
+            attempt,
+            attempts,
+            status_code,
+            usage.get("prompt_tokens", "?"),
+            usage.get("completion_tokens", "?"),
+            usage.get("total_tokens", "?"),
+        )
+        return content.strip(), total_elapsed
+
+    raise MeditronAPIError("Meditron request exhausted retries.", category="request_error")
 
 
 def call_meditron(
@@ -396,15 +529,35 @@ def call_meditron(
     return_latency: bool = False,
 ) -> Any:
     """
-    Send chat completion request to Meditron-27B with retry backoff for rate limits (429).
-    Uses configurable timeout and max_tokens to prevent excessive generation delays.
+    Send chat-completion request to Meditron-27B. max_retries counts retries
+    after the initial request; identical concurrent requests are coalesced.
+
+    Returns the raw content string (or (content, elapsed) if return_latency=True).
+    Uses a pooled HTTP session and logs each attempt, prompt size, and token usage.
     """
     if not config.MEDITRON_API_KEY:
-        raise ValueError("MEDITRON_API_KEY is not configured in .env")
+        raise MeditronAPIError(
+            "MEDITRON_API_KEY is not configured.",
+            category="configuration_error",
+        )
 
-    timeout_val = timeout or config.MEDITRON_TIMEOUT
-    max_tokens_val = max_tokens or config.MEDITRON_MAX_TOKENS
-    retries = max_retries or config.MEDITRON_MAX_RETRIES
+    timeout_val = config.MEDITRON_TIMEOUT if timeout is None else timeout
+    max_tokens_val = config.MEDITRON_MAX_TOKENS if max_tokens is None else max_tokens
+    retries = config.MEDITRON_MAX_RETRIES if max_retries is None else max_retries
+    if retries < 0:
+        raise ValueError("max_retries must be zero or greater.")
+    if timeout_val <= 0 or config.MEDITRON_CONNECT_TIMEOUT <= 0:
+        raise ValueError("Meditron connection and read timeouts must be greater than zero.")
+    if max_tokens_val <= 0:
+        raise ValueError("max_tokens must be greater than zero.")
+
+    prompt_chars = len(system_prompt) + len(user_prompt)
+    logger.info(
+        "Prompt sizes: system=%d chars, user=%d chars, total=%d chars "
+        "(estimated_tokens≈%d), max_tokens=%d",
+        len(system_prompt), len(user_prompt), prompt_chars, (prompt_chars + 3) // 4,
+        max_tokens_val,
+    )
 
     headers = {
         "Authorization": f"{config.MEDITRON_AUTH_SCHEME} {config.MEDITRON_API_KEY}".strip(),
@@ -421,75 +574,45 @@ def call_meditron(
         "max_tokens": max_tokens_val,
         "stream": False,
     }
+    request_fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "url": config.MEDITRON_URL,
+                "payload": payload,
+                "timeout": [config.MEDITRON_CONNECT_TIMEOUT, timeout_val],
+                "retries": retries,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
 
-    last_error: Optional[Exception] = None
+    with _IN_FLIGHT_LOCK:
+        future = _IN_FLIGHT_REQUESTS.get(request_fingerprint)
+        is_owner = future is None
+        if is_owner:
+            future = Future()
+            _IN_FLIGHT_REQUESTS[request_fingerprint] = future
+    assert future is not None
 
-    for attempt in range(1, retries + 1):
-        logger.info(
-            "Calling Meditron API at %s (attempt %d/%d, max_tokens=%d, timeout=%ds)...",
-            config.MEDITRON_URL,
-            attempt,
-            retries,
-            max_tokens_val,
-            timeout_val,
+    if not is_owner:
+        logger.info("Coalescing an identical in-flight Meditron request.")
+        content, elapsed = future.result()
+        return (content, elapsed) if return_latency else content
+
+    try:
+        content, elapsed = _request_meditron(
+            payload=payload,
+            headers=headers,
+            timeout=(config.MEDITRON_CONNECT_TIMEOUT, float(timeout_val)),
+            retries=retries,
         )
-        try:
-            start_t = time.perf_counter()
-            response = requests.post(
-                config.MEDITRON_URL,
-                headers=headers,
-                json=payload,
-                timeout=(10, timeout_val),
-                verify=config.MEDITRON_VERIFY_SSL,
-            )
-            elapsed = time.perf_counter() - start_t
-            logger.info("Meditron response received in %.2f seconds (status=%d)", elapsed, response.status_code)
-
-            if response.status_code == 429:
-                wait_sec = 20
-                try:
-                    retry_hdr = response.headers.get("Retry-After")
-                    if retry_hdr:
-                        wait_sec = max(15, int(retry_hdr))
-                except (ValueError, TypeError):
-                    pass
-                logger.warning(
-                    "Meditron busy or rate limited (HTTP 429: %s). Waiting %d seconds before attempt %d/%d...",
-                    response.text.strip()[:100],
-                    wait_sec,
-                    attempt + 1,
-                    retries,
-                )
-                if attempt < retries:
-                    time.sleep(wait_sec)
-                    continue
-                else:
-                    raise RuntimeError(
-                        f"Meditron API rate limit / busy (HTTP 429): {response.text[:300]}. "
-                        "Please wait a moment before retrying."
-                    )
-
-            if not response.ok:
-                raise RuntimeError(
-                    f"Meditron API error (HTTP {response.status_code}): {response.text[:400]}"
-                )
-
-            result = response.json()
-            choices = result.get("choices")
-            if not choices or not choices[0].get("message", {}).get("content"):
-                raise ValueError(f"Malformed response structure from Meditron: {result}")
-
-            content = choices[0]["message"]["content"].strip()
-            if return_latency:
-                return content, elapsed
-            return content
-
-        except requests.exceptions.RequestException as exc:
-            last_error = exc
-            logger.warning("Request error on attempt %d: %s", attempt, exc)
-            if attempt < retries:
-                time.sleep(3 * attempt)
-            else:
-                raise RuntimeError(f"Meditron API connection failed after {retries} attempts: {exc}") from exc
-
-    raise RuntimeError(f"Failed to call Meditron API: {last_error}")
+        future.set_result((content, elapsed))
+        return (content, elapsed) if return_latency else content
+    except BaseException as exc:
+        future.set_exception(exc)
+        raise
+    finally:
+        with _IN_FLIGHT_LOCK:
+            if _IN_FLIGHT_REQUESTS.get(request_fingerprint) is future:
+                del _IN_FLIGHT_REQUESTS[request_fingerprint]

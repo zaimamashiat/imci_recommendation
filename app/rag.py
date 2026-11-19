@@ -3,6 +3,7 @@ import logging
 import pickle
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -15,6 +16,14 @@ from app import config
 logger = logging.getLogger("imci_rag")
 if not logger.handlers:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+_CLINICAL_PRESCRIPTION_SIGNALS = (
+    "mg/kg", "per kg", "dose:", "doses:", "tablet dose", "syrup dose",
+    "give oral", "give intramuscular", "give rectal", "give iv",
+    "first dose", "second dose", "complete treatment",
+    "treatment a:", "treatment b:", "treatment c:",
+    "plan a:", "plan b:", "plan c:",
+)
 
 
 def compute_file_sha256(file_path: Path) -> str:
@@ -260,18 +269,27 @@ class IMCIRAG:
         if not clean_query:
             return []
 
+        embedding_started = time.perf_counter()
         query_vector = self.model.encode(
             [clean_query],
             normalize_embeddings=True,
             convert_to_numpy=True,
         )[0]
+        logger.info("RAG query embedding completed in %.4fs", time.perf_counter() - embedding_started)
         query_vector = np.asarray(query_vector, dtype=np.float32)
 
+        ranking_started = time.perf_counter()
         scores = np.dot(self.vectors, query_vector)
         ranked_indices = np.argsort(scores)[::-1]
+        logger.info(
+            "RAG similarity ranking completed in %.4fs over %d chunks",
+            time.perf_counter() - ranking_started,
+            len(self.chunks),
+        )
 
         results = []
         seen_texts = set()
+        duplicate_count = 0
 
         for idx in ranked_indices:
             score = float(scores[idx])
@@ -279,10 +297,12 @@ class IMCIRAG:
                 continue
 
             chunk = self.chunks[int(idx)]
-            preview = chunk["text"][:100]
-            if preview in seen_texts:
+            normalized_text = re.sub(r"\s+", " ", chunk["text"]).strip().casefold()
+            duplicate_key = (chunk["page_number"], normalized_text)
+            if duplicate_key in seen_texts:
+                duplicate_count += 1
                 continue
-            seen_texts.add(preview)
+            seen_texts.add(duplicate_key)
 
             results.append({
                 "chunk_id": chunk["chunk_id"],
@@ -295,6 +315,8 @@ class IMCIRAG:
             if len(results) >= top_k:
                 break
 
+        if duplicate_count:
+            logger.info("Skipped %d exact same-page duplicate RAG passages", duplicate_count)
         return results
 
     # -------------------------------------------------------------------------
@@ -320,7 +342,7 @@ class IMCIRAG:
            facility readiness, community counselling, and preventive interventions.
         4. Never return fewer than 1 passage; fall back to a broad disease query.
         """
-        top_k = top_k or config.RETRIEVAL_TOP_K
+        top_k = config.RAG_TOP_K if top_k is None else top_k
 
         # Public-health-oriented query terms per disease
         disease_keywords = {
@@ -387,17 +409,12 @@ class IMCIRAG:
         # --- Deprioritise purely individual-treatment passages ---
         # Passages dominated by drug dosage tables / patient-level prescriptions are
         # moved to the end so the top_k slice prefers prevention/planning content.
-        CLINICAL_PRESCRIPTION_SIGNALS = [
-            "mg/kg", "per kg", "dose:", "doses:", "tablet dose", "syrup dose",
-            "give oral", "give intramuscular", "give rectal", "give iv",
-            "first dose", "second dose", "complete treatment",
-            "treatment a:", "treatment b:", "treatment c:",
-            "plan a:", "plan b:", "plan c:",
-        ]
         priority, deferred = [], []
         for r in results:
             text_lower = r["text"].lower()
-            is_clinical_rx = sum(1 for sig in CLINICAL_PRESCRIPTION_SIGNALS if sig in text_lower) >= 2
+            is_clinical_rx = sum(
+                1 for signal in _CLINICAL_PRESCRIPTION_SIGNALS if signal in text_lower
+            ) >= 2
             (deferred if is_clinical_rx else priority).append(r)
 
         ordered = priority + deferred
@@ -423,28 +440,41 @@ class IMCIRAG:
         max_context_chars: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
-        Get formatted context text and structured passages for LLM consumption.
-        Limits total context to approximately 4,000–6,000 characters while preserving citations.
+        Get formatted context for LLM consumption.
+        Each passage is trimmed to 600 chars. Total capped by max_context_chars.
         """
-        max_chars = max_context_chars or config.MAX_CONTEXT_CHARS
+        max_chars = config.MAX_CONTEXT_CHARS if max_context_chars is None else max_context_chars
+        max_passage_chars = config.RAG_MAX_PASSAGE_CHARS
+        formatting_started = time.perf_counter()
         passages = self.retrieve_for_disease(disease_name, top_k=top_k)
 
         context_parts = []
         current_len = 0
         pages_included = []
+        trimmed_passages = []
 
         for p in passages:
             page_ref = p.get("page") or f"Page {p['page_number']}"
-            block = f"[{page_ref}]\n{p['text']}"
+            text = p["text"][:max_passage_chars].strip()
+            if len(p["text"]) > max_passage_chars and " " in text:
+                text = text.rsplit(" ", 1)[0].rstrip()
+            block = f"[{page_ref}]\n{text}"
             if current_len + len(block) > max_chars and context_parts:
                 break
             context_parts.append(block)
             current_len += len(block)
             pages_included.append(page_ref)
+            trimmed_passages.append({**p, "text": text})
 
+        logger.info(
+            "RAG context formatting completed in %.4fs: %d passages, %d chars",
+            time.perf_counter() - formatting_started,
+            len(trimmed_passages),
+            current_len,
+        )
         return {
             "context": "\n\n---\n\n".join(context_parts),
-            "passages": passages,
+            "passages": trimmed_passages,
             "pages": sorted(set(pages_included)),
             "total_context_chars": current_len,
         }

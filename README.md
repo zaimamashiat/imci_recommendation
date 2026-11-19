@@ -77,6 +77,21 @@ MEDITRON_API_KEY=
 
 Only fill `MEDITRON_API_KEY` if the API provider gave you a key. The code uses Bearer authentication by default; confirm this with the API provider if authentication is required.
 
+### Performance settings
+
+The `.env.example` contains the supported inference and retrieval controls. Defaults are 10 seconds for connection establishment, 180 seconds for response reading, three retries after the initial request, a 1-second exponential backoff base capped at 20 seconds, and at most five passages trimmed to 450 characters each. Connection failures and retryable HTTP statuses are retried; read timeouts are returned without retry because the provider may still be processing the accepted request. `RAG_TOP_K` takes precedence; the older `RETRIEVAL_TOP_K` variable remains supported as an alias. An optional `MAX_CONTEXT_CHARS` can impose a smaller overall context cap; to include all five default-sized passages, set it to at least 2,410 characters or leave it unset.
+
+Successful requests log stage timings, prompt characters and estimated tokens, passage count, provider attempt latency, and provider token usage when available. `/recommendations/generate` includes `db_save` in `pipeline_timing`. Exhausted or invalid model requests return structured HTTP 503/502 errors; the service does not invent fallback recommendations.
+
+Run the local checks from the repository root:
+
+```bat
+.venv\Scripts\python.exe -m unittest -v test_pipeline_optimization
+set PYTHONUTF8=1 && .venv\Scripts\python.exe test_json_repair.py
+```
+
+For an end-to-end timing sample, send the same disease and location to the same endpoint after each configuration change and compare the emitted stage logs. Include the same forecast data and booklet index when comparing prompt/API latency; provider-side latency and token usage are available only when the configured API returns them.
+
 ### Important: identify the forecast count column
 
 The source table contains several numeric fields. Do not assume any of them is the disease count. Start the API as described below and open:

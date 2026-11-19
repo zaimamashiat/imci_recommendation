@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
-from typing import Optional
+import logging
+from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -11,9 +12,11 @@ from app.database import (
     get_saved_recommendations,
     get_source_columns,
 )
+from app.meditron import MeditronAPIError
 from app.rag import IMCIRAG
 from app.service import generate_and_save, generate_disease_recommendation
 
+logger = logging.getLogger("imci_api")
 rag: Optional[IMCIRAG] = None
 
 
@@ -37,6 +40,37 @@ app = FastAPI(
     description="RAG-based public-health and clinical recommendation engine using the IMCI Chart Booklet and Meditron-27B.",
     lifespan=lifespan,
 )
+
+
+def _meditron_http_exception(exc: MeditronAPIError) -> HTTPException:
+    unavailable_categories = {
+        "configuration_error",
+        "connection_error",
+        "rate_limit",
+        "server_error",
+        "timeout",
+        "tls_error",
+    }
+    status_code = 503 if exc.category in unavailable_categories else 502
+    error_code = "meditron_unavailable" if status_code == 503 else "meditron_upstream_error"
+    logger.error(
+        "Meditron request failed (category=%s, provider_status=%s): %s",
+        exc.category,
+        exc.status_code,
+        exc,
+    )
+    detail: Dict[str, Any] = {
+        "error": error_code,
+        "category": exc.category,
+        "message": (
+            "The recommendation model is temporarily unavailable."
+            if status_code == 503
+            else "The recommendation model returned an invalid or rejected response."
+        ),
+    }
+    if exc.status_code is not None:
+        detail["provider_status"] = exc.status_code
+    return HTTPException(status_code=status_code, detail=detail)
 
 
 class GenerateRequest(BaseModel):
@@ -91,6 +125,8 @@ def generate(request: GenerateRequest):
             disease=target_disease,
             rag=rag,
         )
+    except MeditronAPIError as exc:
+        raise _meditron_http_exception(exc) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -109,6 +145,8 @@ def generate_rag_direct(request: GenerateRequest):
             location_value=request.location_value,
             rag=rag,
         )
+    except MeditronAPIError as exc:
+        raise _meditron_http_exception(exc) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 

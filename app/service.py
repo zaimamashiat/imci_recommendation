@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
@@ -97,12 +98,14 @@ Rules:
             "location": location_context,
             "disease_counts": disease_counts,
             "summary": f"No relevant clinical guidance found in the IMCI Chart Booklet for {clean_disease}.",
-            "priority_public_health_measures": [],
-            "health_facility_readiness": [],
-            "caregiver_and_community_communication": [],
+            "government_public_health_interventions": [],
+            "health_system_readiness": [],
+            "community_engagement": [],
+            "government_planning_and_monitoring": [],
             "booklet_references": [],
             "requires_expert_review": True,
             "expert_review_reason": f"Semantic retrieval returned no relevant passages for {clean_disease} in the indexed IMCI booklet.",
+            "pipeline_timing": profiler.finish(),
         }
 
     logger.info(
@@ -120,19 +123,34 @@ Rules:
             disease_counts=disease_counts,
         )
 
-    # 5. Invoke Meditron-27B
-    with profiler.measure("meditron_api"):
-        raw_content = call_meditron(system_prompt=system_prompt, user_prompt=user_prompt)
+    logger.info(
+        "Prompt sizes: system=%d, user=%d, total=%d chars (~%d tokens). "
+        "Context: %d passages, %d chars.",
+        len(system_prompt), len(user_prompt),
+        len(system_prompt) + len(user_prompt),
+        (len(system_prompt) + len(user_prompt) + 3) // 4,
+        len(passages),
+        retrieval_data.get("total_context_chars", 0),
+    )
 
-    # 6. Parse and Validate Response
-    with profiler.measure("response_parsing"):
-        recommendation = parse_and_validate_response(
-            content=raw_content,
-            retrieved_pages=retrieved_pages,
-            expected_disease=clean_disease,
-            location=location_context,
-            disease_counts=disease_counts,
-        )
+    try:
+        # 5. Invoke Meditron-27B
+        with profiler.measure("meditron_api"):
+            raw_content = call_meditron(system_prompt=system_prompt, user_prompt=user_prompt)
+
+        # 6. Parse and Validate Response
+        with profiler.measure("response_parsing"):
+            recommendation = parse_and_validate_response(
+                content=raw_content,
+                retrieved_pages=retrieved_pages,
+                expected_disease=clean_disease,
+                location=location_context,
+                disease_counts=disease_counts,
+            )
+    except Exception:
+        profiler.finish()
+        logger.exception("Recommendation generation failed for %s at %s", clean_disease, clean_val)
+        raise
 
     # Attach retrieved passages metadata for auditing and inspection
     recommendation["retrieved_passages"] = [
@@ -168,11 +186,12 @@ def generate_and_save(
     )
 
     # Attempt saving to database if table is available
+    save_started = time.perf_counter()
     try:
         loc = rec.get("location", {})
-        public_health_text = "; ".join(rec.get("priority_public_health_measures", []))
-        facility_text = "; ".join(rec.get("health_facility_readiness", []))
-        comm_text = "; ".join(rec.get("caregiver_and_community_communication", []))
+        public_health_text = "; ".join(rec.get("government_public_health_interventions", []))
+        facility_text = "; ".join(rec.get("health_system_readiness", []))
+        comm_text = "; ".join(rec.get("community_engagement", []))
 
         db_record = {
             "location_type": loc.get("selected_level", location_level),
@@ -200,5 +219,20 @@ def generate_and_save(
     except Exception as exc:
         logger.warning("Could not persist recommendation to PostgreSQL: %s", exc)
         rec["saved_to_database"] = False
+    finally:
+        save_elapsed = time.perf_counter() - save_started
+        timing = rec.get("pipeline_timing")
+        if timing:
+            timing["stage_durations_seconds"]["db_save"] = round(save_elapsed, 4)
+            timing["formatted_stages"]["db_save"] = (
+                f"{save_elapsed * 1000:.2f} ms"
+                if save_elapsed < 1.0
+                else f"{save_elapsed:.2f} s"
+            )
+            timing["total_duration_seconds"] = round(
+                timing["total_duration_seconds"] + save_elapsed,
+                4,
+            )
+        logger.info("Stage 'db_save' completed in %.4f s", save_elapsed)
 
     return rec

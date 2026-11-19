@@ -19,9 +19,13 @@ MEDITRON_URL = (
 MEDITRON_MODEL = os.getenv("MEDITRON_MODEL", "meditron-27b")
 MEDITRON_API_KEY = os.getenv("MEDITRON_API_KEY", "")
 MEDITRON_AUTH_SCHEME = os.getenv("MEDITRON_AUTH_SCHEME", "Bearer")
-MEDITRON_TIMEOUT = int(os.getenv("MEDITRON_TIMEOUT", "300"))
-MEDITRON_MAX_TOKENS = int(os.getenv("MEDITRON_MAX_TOKENS", "700"))
+MEDITRON_TIMEOUT = int(os.getenv("MEDITRON_TIMEOUT", "180"))
+MEDITRON_CONNECT_TIMEOUT = float(os.getenv("MEDITRON_CONNECT_TIMEOUT", "10"))
+MEDITRON_MAX_TOKENS = int(os.getenv("MEDITRON_MAX_TOKENS", "400"))
 MEDITRON_MAX_RETRIES = int(os.getenv("MEDITRON_MAX_RETRIES", "3"))
+MEDITRON_RETRY_BASE_DELAY = float(os.getenv("MEDITRON_RETRY_BASE_DELAY", "1"))
+MEDITRON_RETRY_MAX_DELAY = float(os.getenv("MEDITRON_RETRY_MAX_DELAY", "20"))
+MEDITRON_RETRY_JITTER = float(os.getenv("MEDITRON_RETRY_JITTER", "0.25"))
 
 _verify_ssl_env = os.getenv("MEDITRON_VERIFY_SSL", "true").strip()
 if _verify_ssl_env.lower() in ("false", "0", "no"):
@@ -39,9 +43,15 @@ IMCI_PDF_PATH = os.getenv(
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1200"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "200"))
-RETRIEVAL_TOP_K = int(os.getenv("RETRIEVAL_TOP_K", os.getenv("RAG_TOP_K", "3")))
-RAG_TOP_K = RETRIEVAL_TOP_K
-MAX_CONTEXT_CHARS = int(os.getenv("MAX_CONTEXT_CHARS", "4000"))
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", os.getenv("RETRIEVAL_TOP_K", "5")))
+RETRIEVAL_TOP_K = RAG_TOP_K
+RAG_MAX_PASSAGE_CHARS = int(os.getenv("RAG_MAX_PASSAGE_CHARS", "450"))
+MAX_CONTEXT_CHARS = int(
+    os.getenv(
+        "MAX_CONTEXT_CHARS",
+        str(RAG_TOP_K * (RAG_MAX_PASSAGE_CHARS + 32)),
+    )
+)
 
 # Persistence cache for the vector index
 INDEX_CACHE_PATH = os.getenv(
