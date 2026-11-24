@@ -1,0 +1,830 @@
+[
+  {
+    "location_type": "district",
+    "location_key": "district:10|04",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "district",
+    "location_key": "district:10|06",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "district",
+    "location_key": "district:10|42",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "district",
+    "location_key": "district:10|78",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "district",
+    "location_key": "district:10|79",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "district",
+    "location_key": "district:30|54",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "district",
+    "location_key": "district:30|86",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "district",
+    "location_key": "district:40|87",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "district",
+    "location_key": "district:55|32",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|04|19|151",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|02|142",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|02|151",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|02|309",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|02|673",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|02|682",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|03|175",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|03|209",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|03|408",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|03|442",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|03|509",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|03|675",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|07|142",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|07|185",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|07|176",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|07|211",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|07|220",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|07|229",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|07|280",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|07|314",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|07|447",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|07|456",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|07|548",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|07|557",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|07|616",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|07|683",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|10|142",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|10|151",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|10|160",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|10|178",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|10|377",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|10|708",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|10|717",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|10|776",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|51|175",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|51|184",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|51|193",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|51|202",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|51|211",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|51|411",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|51|445",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|51|677",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|51|711",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|51|745",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|32|142",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|32|151",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|32|177",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|32|442",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|32|509",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|32|543",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|32|709",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|36|142",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|36|209",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|36|309",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|36|343",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|36|352",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|36|510",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|62|109",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|62|118",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|62|144",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|62|153",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|62|179",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|62|188",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|62|215",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|62|315",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|62|415",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|62|424",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|62|483",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|62|517",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|62|716",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|62|783",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|69|142",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|69|176",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|69|309",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|69|442",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|69|509",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|69|543",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|69|709",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|94|142",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|94|151",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|94|309",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|94|343",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|94|410",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|94|576",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|94|709",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|94|718",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|06|94|727",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|42|73|209",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|42|73|711",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|78|38|454",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|78|76|508",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|79|87|143",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:10|79|87|543",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:30|54|40|109",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:30|54|40|178",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:30|54|40|212",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:30|54|40|313",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:30|54|40|446",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:30|54|40|455",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:30|54|40|548",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:30|54|40|615",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:30|54|40|682",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:30|54|40|716",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:30|54|40|725",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:30|54|80|613",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:30|86|36|543",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:30|86|36|710",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:40|87|86|997",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "union",
+    "location_key": "union:55|32|82|378",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:10|04|19",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:10|06|02",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:10|06|03",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:10|06|07",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:10|06|10",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:10|06|51",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:10|06|32",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:10|06|36",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:10|06|62",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:10|06|69",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:10|06|94",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:10|42|73",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:10|78|38",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:10|78|76",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:10|79|87",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:30|54|40",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:30|54|80",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:30|86|36",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:40|87|86",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  },
+  {
+    "location_type": "upazila",
+    "location_key": "upazila:55|32|82",
+    "forecast_date": "2027-05-11",
+    "persist": true
+  }
+]
